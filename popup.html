@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>LinkedIn Easy Apply</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h2>LinkedIn Easy Apply Automator</h2>
+    <div class="config">
+      <p>Make sure you're on LinkedIn jobs page</p>
+      <label>
+        <input type="checkbox" id="autoScroll" checked>
+        Auto-scroll through jobs
+      </label>
+    </div>
+    <div class="controls">
+      <button id="startApply">Start Auto Apply</button>
+      <button id="stopApply">Stop</button>
+    </div>
+    <div class="stats">
+      <p>Jobs Applied: <span id="jobCount">0</span></p>
+      <p class="status" id="status">Ready</p>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

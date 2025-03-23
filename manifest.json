@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn Easy Apply Automator",
+  "version": "1.0",
+  "description": "Automates LinkedIn Easy Apply process",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.linkedin.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [{
+    "matches": [
+      "https://*.linkedin.com/jobs*",
+      "https://*.linkedin.com/jobs/*",
+      "https://www.linkedin.com/jobs/search/*"
+    ],
+    "js": ["content.js"],
+    "run_at": "document_end"
+  }]
+}
