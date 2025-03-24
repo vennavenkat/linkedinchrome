@@ -2,6 +2,7 @@ console.log('LinkedIn Easy Apply content script loaded');
 
 let isAutomating = false;
 let jobsApplied = 0;
+let fab = null;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('Message received:', message);
@@ -242,34 +243,47 @@ async function isJobAlreadyApplied() {
 
 async function findNextJob() {
     try {
-        // Wait for job list and get all job cards
+        // Wait for job list to load
         await new Promise(r => setTimeout(r, 2000));
-        const jobCards = Array.from(document.querySelectorAll('.job-card-container--clickable'));
         
-        // Find current job and next job
-        const currentJob = document.querySelector('.job-card-container--selected');
-        const currentIndex = currentJob ? jobCards.indexOf(currentJob) : -1;
-        const nextJob = jobCards[currentIndex + 1];
-
-        if (nextJob) {
-            nextJob.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            await new Promise(r => setTimeout(r, 1000));
-            nextJob.click();
-            await new Promise(r => setTimeout(r, 2000));
-            return true;
-        }
-
-        // If no next job, try next page
-        const nextButton = document.querySelector('.artdeco-pagination__button--next:not([disabled])');
-        if (nextButton) {
-            nextButton.click();
-            await new Promise(r => setTimeout(r, 3000));
-            const firstJob = document.querySelector('.job-card-container--clickable');
-            if (firstJob) {
-                firstJob.click();
-                await new Promise(r => setTimeout(r, 2000));
+        // Get all job cards with the correct class combination
+        const jobCards = Array.from(document.querySelectorAll('.job-card-container.job-card-list.job-card-container--clickable:not([data-processed="true"])'));
+        
+        console.log(`Found ${jobCards.length} unprocessed job cards`);
+        
+        if (jobCards.length === 0) {
+            // Try next page
+            const nextButton = document.querySelector('button[aria-label="Next"]');
+            if (nextButton && !nextButton.disabled) {
+                console.log('Moving to next page...');
+                nextButton.scrollIntoView({ behavior: 'smooth' });
+                await new Promise(r => setTimeout(r, 1000));
+                nextButton.click();
+                await new Promise(r => setTimeout(r, 3000));
+                // Reset processed state for new page
+                document.querySelectorAll('.job-card-container[data-processed]')
+                    .forEach(card => card.removeAttribute('data-processed'));
                 return true;
             }
+            return false;
+        }
+
+        // Get the first unprocessed job
+        const nextJob = jobCards[0];
+        nextJob.setAttribute('data-processed', 'true');
+
+        // Find the job title link within the card
+        const jobLink = nextJob.querySelector('a.job-card-list__title, a[href*="/jobs/view/"]');
+        if (jobLink) {
+            console.log('Found next job:', jobLink.textContent.trim());
+            // Scroll the job into view
+            nextJob.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            await new Promise(r => setTimeout(r, 1500));
+            
+            // Click the job
+            jobLink.click();
+            await new Promise(r => setTimeout(r, 2000));
+            return true;
         }
 
         return false;
@@ -283,25 +297,43 @@ async function applyToJobs() {
     try {
         console.log('Starting job applications...');
         while (isAutomating) {
-            // Wait for page to load
+            // Wait for page load
             await new Promise(r => setTimeout(r, 2000));
             
-            // Find and click Easy Apply button
-            const easyApplyBtn = document.querySelector('button.jobs-apply-button');
-            if (easyApplyBtn && !easyApplyBtn.disabled && 
-                easyApplyBtn.textContent.toLowerCase().includes('easy apply')) {
-                
-                console.log('Found Easy Apply button, clicking...');
-                easyApplyBtn.click();
-                await new Promise(r => setTimeout(r, 2000));
-                
-                const applied = await handleApplicationModal();
-                if (applied) {
-                    jobsApplied++;
-                    console.log(`Applied successfully! Total: ${jobsApplied}`);
-                    chrome.runtime.sendMessage({ type: 'updateJobCount', count: jobsApplied });
+            // Check if already applied
+            if (await isJobAlreadyApplied()) {
+                console.log('Already applied to this job, moving to next...');
+                if (!await findNextJob()) {
+                    console.log('No more jobs available');
+                    break;
                 }
-                await new Promise(r => setTimeout(r, 1000));
+                continue;
+            }
+
+            // Find Easy Apply button and check if it's clickable
+            const easyApplyBtn = document.querySelector('.jobs-apply-button:not([disabled])');
+            if (!easyApplyBtn || !easyApplyBtn.textContent.toLowerCase().includes('easy apply')) {
+                console.log('No Easy Apply button found or button disabled, moving to next job...');
+                if (!await findNextJob()) {
+                    console.log('No more jobs available');
+                    break;
+                }
+                continue;
+            }
+
+            // Apply to current job
+            console.log('Clicking Easy Apply button...');
+            easyApplyBtn.click();
+            await new Promise(r => setTimeout(r, 2000));
+
+            const applied = await handleApplicationModal();
+            if (applied) {
+                jobsApplied++;
+                console.log(`Successfully applied! Total: ${jobsApplied}`);
+                chrome.runtime.sendMessage({ type: 'updateJobCount', count: jobsApplied });
+                
+                // Additional wait after successful application
+                await new Promise(r => setTimeout(r, 1500));
             }
 
             // Move to next job
@@ -309,10 +341,155 @@ async function applyToJobs() {
                 console.log('No more jobs available');
                 break;
             }
-            
+
+            // Wait between jobs
             await new Promise(r => setTimeout(r, 2000));
         }
     } catch (error) {
         console.error('Error in automation:', error);
     }
 }
+
+async function processApplicationSteps() {
+    console.log("⏩ Processing application steps...");
+    stepCounter = 0;
+    consecutiveEmptySteps = 0;
+    
+    try {
+        while (isAutomating && stepCounter < maxSteps) {
+            await handleFormFields();
+            await delay(1000);
+            
+            // Check for success message
+            const modalContent = document.querySelector('.artdeco-modal__content');
+            if (modalContent?.textContent.toLowerCase().includes('application submitted') ||
+                modalContent?.textContent.toLowerCase().includes('applied')) {
+                console.log("🎉 Application successful!");
+                const doneButton = document.querySelector('button[aria-label="Dismiss"], button[aria-label="Done"]');
+                if (doneButton) {
+                    doneButton.click();
+                    await delay(1000);
+                }
+                return true;
+            }
+
+            // Look for buttons in order of priority
+            const submitButton = document.querySelector('button[aria-label="Submit application"]');
+            const nextButton = document.querySelector('button[aria-label="Continue to next step"]');
+            const reviewButton = document.querySelector('button[aria-label="Review your application"]');
+            
+            if (submitButton) {
+                console.log("Found Submit button, clicking...");
+                submitButton.click();
+                await delay(2000);
+                return true;
+            } else if (nextButton) {
+                console.log("Found Next button, clicking...");
+                nextButton.click();
+                await delay(1500);
+            } else if (reviewButton) {
+                console.log("Found Review button, clicking...");
+                reviewButton.click();
+                await delay(1500);
+            } else {
+                console.log("No action buttons found");
+                consecutiveEmptySteps++;
+                if (consecutiveEmptySteps >= 3) {
+                    return false;
+                }
+            }
+            
+            stepCounter++;
+            await delay(1500);
+        }
+        return false;
+    } catch (error) {
+        console.error("Error in application steps:", error);
+        return false;
+    }
+}
+
+function createApplyButton() {
+    if (document.getElementById('linkedinAutoApplyFab')) return;
+    
+    fab = document.createElement('button');
+    fab.id = 'linkedinAutoApplyFab';
+    fab.innerHTML = `
+        <span class="fab-icon">▶</span>
+        <span class="fab-text">Auto Apply</span>
+    `;
+    
+    // Style the button
+    const style = {
+        position: 'fixed',
+        right: '20px',
+        top: '100px',
+        zIndex: '9999',
+        padding: '12px 20px',
+        background: 'linear-gradient(135deg, #0077b5, #0a66c2)',
+        color: 'white',
+        border: 'none',
+        borderRadius: '8px',
+        cursor: 'pointer',
+        fontSize: '14px',
+        fontWeight: 'bold',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+        transition: 'all 0.3s ease'
+    };
+    
+    Object.assign(fab.style, style);
+    
+    // Add hover effect
+    fab.onmouseover = () => {
+        fab.style.transform = 'translateY(-2px)';
+        fab.style.boxShadow = '0 6px 16px rgba(0,0,0,0.2)';
+    };
+    fab.onmouseout = () => {
+        fab.style.transform = 'translateY(0)';
+        fab.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+    };
+    
+    // Add click handler
+    fab.addEventListener('click', () => {
+        if (!isAutomating) {
+            isAutomating = true;
+            jobsApplied = 0;
+            fab.innerHTML = `
+                <span class="fab-icon">⏹</span>
+                <span class="fab-text">Stop</span>
+            `;
+            fab.style.background = 'linear-gradient(135deg, #dc3545, #c82333)';
+            applyToJobs();
+        } else {
+            isAutomating = false;
+            fab.innerHTML = `
+                <span class="fab-icon">▶</span>
+                <span class="fab-text">Auto Apply</span>
+            `;
+            fab.style.background = 'linear-gradient(135deg, #0077b5, #0a66c2)';
+        }
+    });
+    
+    document.body.appendChild(fab);
+}
+
+// Add this to initialize the button
+window.addEventListener('load', () => {
+    if (window.location.href.includes('linkedin.com/jobs')) {
+        createApplyButton();
+    }
+});
+
+// Also listen for URL changes to add button on job searches
+let lastUrl = location.href;
+new MutationObserver(() => {
+    if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        if (location.href.includes('linkedin.com/jobs')) {
+            createApplyButton();
+        }
+    }
+}).observe(document, { subtree: true, childList: true });
